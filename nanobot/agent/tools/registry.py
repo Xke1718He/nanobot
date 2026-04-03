@@ -1,8 +1,13 @@
 """Tool registry for dynamic tool management."""
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 from nanobot.agent.tools.base import Tool
+
+if TYPE_CHECKING:
+    from nanobot.agent.tool_middleware import ToolRuntime
 
 
 class ToolRegistry:
@@ -82,7 +87,12 @@ class ToolRegistry:
             )
         return tool, cast_params, None
 
-    async def execute(self, name: str, params: dict[str, Any]) -> Any:
+    async def execute(
+        self,
+        name: str,
+        params: dict[str, Any],
+        runtime: ToolRuntime | None = None,
+    ) -> Any:
         """Execute a tool by name with given parameters."""
         _HINT = "\n\n[Analyze the error above and try a different approach.]"
         tool, params, error = self.prepare_call(name, params)
@@ -91,6 +101,8 @@ class ToolRegistry:
 
         try:
             assert tool is not None  # guarded by prepare_call()
+            if runtime is not None:
+                params = {**params, "_tool_runtime": runtime}
             result = await tool.execute(**params)
             if isinstance(result, str) and result.startswith("Error"):
                 return result + _HINT

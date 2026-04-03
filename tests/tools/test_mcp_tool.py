@@ -192,6 +192,22 @@ async def test_execute_returns_text_blocks() -> None:
 
 
 @pytest.mark.asyncio
+async def test_execute_strips_tool_runtime_from_mcp_arguments() -> None:
+    seen_arguments: dict[str, object] = {}
+
+    async def call_tool(_name: str, arguments: dict) -> object:
+        seen_arguments.update(arguments)
+        return SimpleNamespace(content=[_FakeTextContent("hello")])
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+
+    result = await wrapper.execute(value=1, _tool_runtime=object())
+
+    assert result == "hello"
+    assert seen_arguments == {"value": 1}
+
+
+@pytest.mark.asyncio
 async def test_execute_returns_timeout_message() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
         await asyncio.sleep(1)

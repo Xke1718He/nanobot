@@ -149,6 +149,29 @@ def test_no_tool_messages_unchanged():
     _assert_no_orphans(history)
 
 
+def test_get_history_preserves_assistant_reasoning_fields() -> None:
+    session = Session(key="test:reasoning")
+    session.messages.extend([
+        {"role": "user", "content": "question"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "x", "arguments": "{}"}},
+            ],
+            "reasoning_content": "hidden reasoning",
+            "thinking_blocks": [{"type": "thinking", "thinking": "step"}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "name": "x", "content": "ok"},
+    ])
+
+    history = session.get_history(max_messages=500)
+
+    assistant = next(message for message in history if message.get("role") == "assistant")
+    assert assistant["reasoning_content"] == "hidden reasoning"
+    assert assistant["thinking_blocks"] == [{"type": "thinking", "thinking": "step"}]
+
+
 # --- Edge: all leading messages are orphan tool results ---
 
 def test_all_orphan_prefix_stripped():

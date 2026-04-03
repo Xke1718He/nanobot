@@ -11,6 +11,7 @@ from loguru import logger
 
 from nanobot.agent.hook import AgentHook, AgentHookContext
 from nanobot.utils.prompt_templates import render_template
+from nanobot.agent.tool_middleware import ToolCallContext, ToolMiddleware, ToolRuntime
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.providers.base import LLMProvider, ToolCallRequest
 from nanobot.utils.helpers import (
@@ -65,6 +66,8 @@ class AgentRunSpec:
     provider_retry_mode: str = "standard"
     progress_callback: Any | None = None
     checkpoint_callback: Any | None = None
+    tool_middleware: ToolMiddleware | None = None
+    tool_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -152,6 +155,7 @@ class AgentRunner:
                     spec,
                     response.tool_calls,
                     external_lookup_counts,
+                    iteration,
                 )
                 tool_events.extend(new_events)
                 context.tool_results = list(results)
@@ -402,18 +406,19 @@ class AgentRunner:
         spec: AgentRunSpec,
         tool_calls: list[ToolCallRequest],
         external_lookup_counts: dict[str, int],
+        iteration: int = 0,
     ) -> tuple[list[Any], list[dict[str, str]], BaseException | None]:
         batches = self._partition_tool_batches(spec, tool_calls)
         tool_results: list[tuple[Any, dict[str, str], BaseException | None]] = []
         for batch in batches:
             if spec.concurrent_tools and len(batch) > 1:
                 tool_results.extend(await asyncio.gather(*(
-                    self._run_tool(spec, tool_call, external_lookup_counts)
+                    self._run_tool(spec, tool_call, external_lookup_counts, iteration)
                     for tool_call in batch
                 )))
             else:
                 for tool_call in batch:
-                    tool_results.append(await self._run_tool(spec, tool_call, external_lookup_counts))
+                    tool_results.append(await self._run_tool(spec, tool_call, external_lookup_counts, iteration))
 
         results: list[Any] = []
         events: list[dict[str, str]] = []
@@ -430,6 +435,7 @@ class AgentRunner:
         spec: AgentRunSpec,
         tool_call: ToolCallRequest,
         external_lookup_counts: dict[str, int],
+        iteration: int = 0,
     ) -> tuple[Any, dict[str, str], BaseException | None]:
         _HINT = "\n\n[Analyze the error above and try a different approach.]"
         lookup_error = repeated_external_lookup_error(
@@ -446,6 +452,19 @@ class AgentRunner:
             if spec.fail_on_tool_error:
                 return lookup_error + _HINT, event, RuntimeError(lookup_error)
             return lookup_error + _HINT, event, None
+        tool_context = ToolCallContext(
+            call_id=tool_call.id,
+            tool_name=tool_call.name,
+            arguments=dict(tool_call.arguments),
+            iteration=iteration,
+            session_key=spec.session_key,
+            metadata=dict(spec.tool_metadata),
+        )
+        runtime = ToolRuntime(
+            context=tool_context,
+            middleware=spec.tool_middleware,
+            loop=asyncio.get_running_loop(),
+        )
         prepare_call = getattr(spec.tools, "prepare_call", None)
         tool, params, prep_error = None, tool_call.arguments, None
         if callable(prepare_call):
@@ -461,15 +480,26 @@ class AgentRunner:
                 "status": "error",
                 "detail": prep_error.split(": ", 1)[-1][:120],
             }
+            if spec.tool_middleware is not None:
+                await spec.tool_middleware.on_error(tool_context, RuntimeError(prep_error))
             return prep_error + _HINT, event, RuntimeError(prep_error) if spec.fail_on_tool_error else None
         try:
+            if spec.tool_middleware is not None:
+                await spec.tool_middleware.before_call(tool_context)
+            params = {**params, "_tool_runtime": runtime}
             if tool is not None:
                 result = await tool.execute(**params)
             else:
-                result = await spec.tools.execute(tool_call.name, params)
+                result = await spec.tools.execute(tool_call.name, params, runtime=runtime)
+            await runtime.drain()
+            if spec.tool_middleware is not None:
+                await spec.tool_middleware.after_call(tool_context, result)
         except asyncio.CancelledError:
             raise
         except BaseException as exc:
+            await runtime.drain()
+            if spec.tool_middleware is not None:
+                await spec.tool_middleware.on_error(tool_context, exc)
             event = {
                 "name": tool_call.name,
                 "status": "error",
@@ -720,4 +750,3 @@ class AgentRunner:
         if current:
             batches.append(current)
         return batches
-

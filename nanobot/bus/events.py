@@ -30,9 +30,8 @@ class OutboundMessage:
 
     channel: str
     chat_id: str
-    content: str
+    content: str | dict[str, Any]
     reply_to: str | None = None
     media: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
-
 

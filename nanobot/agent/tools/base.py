@@ -1,9 +1,14 @@
 """Base class for agent tools."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from copy import deepcopy
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
+
+if TYPE_CHECKING:
+    from nanobot.agent.tool_middleware import ToolRuntime
 
 _ToolT = TypeVar("_ToolT", bound="Tool")
 
@@ -176,6 +181,10 @@ class Tool(ABC):
             return obj
         props = schema.get("properties", {})
         return {k: self._cast_value(v, props[k]) if k in props else v for k, v in obj.items()}
+
+    def _get_tool_runtime(self, kwargs: dict[str, Any]) -> ToolRuntime | None:
+        """Extract the optional tool runtime middleware bridge from kwargs."""
+        return kwargs.pop("_tool_runtime", None)
 
     def cast_params(self, params: dict[str, Any]) -> dict[str, Any]:
         """Apply safe schema-driven casts before validation."""

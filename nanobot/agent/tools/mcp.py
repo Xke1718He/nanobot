@@ -99,6 +99,7 @@ class MCPToolWrapper(Tool):
         return self._parameters
 
     async def execute(self, **kwargs: Any) -> str:
+        self._get_tool_runtime(kwargs)
         from mcp import types
 
         try:

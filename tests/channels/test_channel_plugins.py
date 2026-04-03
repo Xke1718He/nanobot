@@ -57,6 +57,24 @@ class _FakeTelegram(BaseChannel):
         pass
 
 
+class _RecordingChannel(BaseChannel):
+    name = "recording"
+    display_name = "Recording"
+
+    def __init__(self, config, bus):
+        super().__init__(config, bus)
+        self.sent_messages: list[OutboundMessage] = []
+
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
+    async def send(self, msg: OutboundMessage) -> None:
+        self.sent_messages.append(msg)
+
+
 def _make_entry_point(name: str, cls: type):
     """Create a mock entry point that returns *cls* on load()."""
     ep = SimpleNamespace(name=name, load=lambda _cls=cls: _cls)
@@ -293,6 +311,44 @@ async def test_manager_skips_disabled_plugin():
         mgr._init_channels()
 
     assert "fakeplugin" not in mgr.channels
+
+
+@pytest.mark.asyncio
+async def test_dispatch_outbound_renders_structured_tool_progress_as_text():
+    fake_config = SimpleNamespace(
+        channels=ChannelsConfig(),
+        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+    )
+    mgr = ChannelManager.__new__(ChannelManager)
+    mgr.config = fake_config
+    mgr.bus = MessageBus()
+    mgr.channels = {"recording": _RecordingChannel({"enabled": True}, mgr.bus)}
+    mgr._dispatch_task = None
+
+    task = asyncio.create_task(mgr._dispatch_outbound())
+    try:
+        await mgr.bus.publish_outbound(OutboundMessage(
+            channel="recording",
+            chat_id="chat-1",
+            content={
+                "type": "tool_event",
+                "phase": "progress",
+                "tool_name": "read_file",
+                "percent": 42,
+                "message": "Reading chunk",
+            },
+            metadata={"_progress": True},
+        ))
+        await asyncio.sleep(0.05)
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    channel = mgr.channels["recording"]
+    assert channel.sent_messages[0].content == "[read_file] 42% Reading chunk"
 
 
 # ---------------------------------------------------------------------------

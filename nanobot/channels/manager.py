@@ -169,6 +169,8 @@ class ChannelManager:
                         continue
                     if not msg.metadata.get("_tool_hint") and not self.config.channels.send_progress:
                         continue
+                    if isinstance(msg.content, dict):
+                        msg.content = self._render_progress_content(msg.content)
 
                 # Coalesce consecutive _stream_delta messages for the same (channel, chat_id)
                 # to reduce API calls and improve streaming latency
@@ -274,6 +276,36 @@ class ChannelManager:
                     await asyncio.sleep(delay)
                 except asyncio.CancelledError:
                     raise  # Propagate cancellation during sleep
+
+    @staticmethod
+    def _render_progress_content(content: dict[str, Any]) -> str:
+        """Render structured progress payloads for channels that only accept text."""
+        payload_type = str(content.get("type", "")).lower()
+        if payload_type == "tool_event":
+            tool_name = content.get("tool_name", "tool")
+            phase = str(content.get("phase", "")).lower()
+            message = str(content.get("message", "")).strip()
+            percent = content.get("percent")
+            if phase == "start":
+                return f"[{tool_name}] starting"
+            if phase == "finish":
+                return f"[{tool_name}] completed"
+            if phase == "error":
+                return f"[{tool_name}] failed: {message or 'unknown error'}"
+            if percent is not None:
+                suffix = f" {message}" if message else ""
+                return f"[{tool_name}] {percent}%{suffix}"
+            return f"[{tool_name}] {message}" if message else f"[{tool_name}] running"
+
+        if payload_type == "progress":
+            message = str(content.get("message", "") or content.get("stage", "")).strip()
+            percent = content.get("percent")
+            if percent is not None:
+                suffix = f" {message}" if message else ""
+                return f"{percent}%{suffix}"
+            return message or str(content)
+
+        return str(content)
 
     def get_channel(self, name: str) -> BaseChannel | None:
         """Get a channel by name."""
